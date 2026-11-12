@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.config.database import Base
@@ -27,4 +27,8 @@ class EventLog(Base):
     channel: Mapped[str] = mapped_column(String(24), nullable=False, default="organic")
     device: Mapped[str] = mapped_column(String(16), nullable=False, default="ios")
     source: Mapped[str] = mapped_column(String(24), nullable=False, default="fixture")
+    # 由哪次校正/数据版本写入；基线 fixture 事件为 NULL
+    data_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("data_versions.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

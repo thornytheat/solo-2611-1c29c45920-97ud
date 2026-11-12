@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from '../components/layout/AppShell';
 import Attribution from '../pages/Attribution';
+import EventBackfill from '../pages/EventBackfill';
 import FunnelDefs from '../pages/FunnelDefs';
 import FunnelResult from '../pages/FunnelResult';
 import Login from '../pages/Login';
@@ -43,6 +44,14 @@ export default function AppRouter() {
         element={
           <Protected permission="run:read">
             <PathAnalysis />
+          </Protected>
+        }
+      />
+      <Route
+        path="/backfill"
+        element={
+          <Protected permission="run:read">
+            <EventBackfill />
           </Protected>
         }
       />

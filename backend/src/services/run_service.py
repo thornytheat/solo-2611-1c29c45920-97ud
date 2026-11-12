@@ -12,7 +12,7 @@ from src.models.event import EventLog
 from src.models.funnel import FunnelDef
 from src.models.funnel_run import FunnelRun
 from src.models.session_path import SessionPath
-from src.services import funnel_engine, path_engine, segment_service
+from src.services import data_version_service, funnel_engine, path_engine, segment_service
 from src.utils.errors import not_found
 from src.utils.pathutil import path_label
 from src.utils.timeutil import BIZ_TZ, iso
@@ -28,6 +28,12 @@ def execute(
     trigger: str = RunTrigger.MANUAL.value,
     code: str | None = None,
     window_days: int | None = None,
+    *,
+    data_version=None,
+    baseline_run_id: int | None = None,
+    correction_meta: dict | None = None,
+    is_current: bool = True,
+    bind_baseline_version: bool = True,
 ) -> FunnelRun:
     window = window_days or funnel.window_days
     vocabulary = funnel.vocabulary
@@ -85,6 +91,21 @@ def execute(
     run.entry_users = result["entry_users"]
     run.converted_users = result["converted_users"]
     run.engine_version = ENGINE_VERSION
+    # ---- 版本绑定：冻结当时配置与数据指纹 ----
+    snapshot = data_version_service.config_snapshot(funnel, window)
+    run.config_snapshot = snapshot
+    run.baseline_run_id = baseline_run_id
+    run.correction_meta = correction_meta or {}
+    run.is_current = bool(is_current)
+    if data_version is not None:
+        # 校正运行：绑定由 correction_service 激活的新版本
+        run.data_version_id = data_version.id
+        run.data_fingerprint = data_version.fingerprint
+    elif bind_baseline_version:
+        # 普通/seed 运行：兜底建立或复用基线数据版本
+        version = data_version_service.ensure_baseline(db, funnel, run)
+        run.data_version_id = version.id
+        run.data_fingerprint = version.fingerprint
     run.started_at = now
     run.finished_at = datetime.now(BIZ_TZ).replace(tzinfo=None)
     db.flush()
@@ -126,11 +147,12 @@ def max_loss_step(steps: list[dict]) -> int:
     return best_index
 
 
-def serialize(run: FunnelRun, funnel: FunnelDef | None = None) -> dict:
+def serialize(run: FunnelRun, funnel: FunnelDef | None = None, data_version=None) -> dict:
     duration = (run.duration_stats or {}).get("duration", {})
     transitions = (run.duration_stats or {}).get("transitions", [])
     step_rows = run.step_counts or []
     lost_rows = path_engine.drop_steps(step_rows)
+    snapshot = run.config_snapshot or {}
     return {
         "id": run.id,
         "code": run.code,
@@ -140,6 +162,7 @@ def serialize(run: FunnelRun, funnel: FunnelDef | None = None) -> dict:
         "line_no": funnel.line_no if funnel else None,
         "line_color": funnel.line_color if funnel else None,
         "trigger": run.trigger,
+        "trigger_label": run.trigger,
         "status": run.status,
         "window_days": run.window_days,
         "entry_users": run.entry_users,
@@ -153,6 +176,18 @@ def serialize(run: FunnelRun, funnel: FunnelDef | None = None) -> dict:
         "lost_steps": lost_rows,
         "max_loss_step": max_loss_step(step_rows) if step_rows else 1,
         "engine_version": run.engine_version,
+        # ---- 版本绑定与校正信息 ----
+        "is_current": bool(run.is_current),
+        "data_version_id": run.data_version_id,
+        "data_version_no": getattr(data_version, "version_no", None),
+        "data_version_code": getattr(data_version, "code", None),
+        "data_fingerprint": run.data_fingerprint or "",
+        "data_fingerprint_short": (run.data_fingerprint or "")[:12],
+        "config_snapshot": snapshot,
+        "config_frozen": bool(snapshot),
+        "baseline_run_id": run.baseline_run_id,
+        "correction_meta": run.correction_meta or {},
+        "is_correction": run.trigger == RunTrigger.CORRECTION.value,
         "started_at": iso(run.started_at),
         "finished_at": iso(run.finished_at),
     }
@@ -164,7 +199,17 @@ def list_runs(db: Session, funnel_id: int | None = None, limit: int = 20) -> lis
         stmt = select(FunnelRun).where(FunnelRun.funnel_id == funnel_id).order_by(FunnelRun.id.desc()).limit(limit)
     runs = db.scalars(stmt).all()
     funnels = {funnel.id: funnel for funnel in db.scalars(select(FunnelDef)).all()}
-    return [serialize(run, funnels.get(run.funnel_id)) for run in runs]
+    versions = _version_map(db, {run.data_version_id for run in runs if run.data_version_id})
+    return [serialize(run, funnels.get(run.funnel_id), versions.get(run.data_version_id)) for run in runs]
+
+
+def _version_map(db: Session, version_ids: set[int]) -> dict:
+    if not version_ids:
+        return {}
+    from src.models.data_version import DataVersion
+
+    rows = db.scalars(select(DataVersion).where(DataVersion.id.in_(version_ids))).all()
+    return {row.id: row for row in rows}
 
 
 def get_run(db: Session, run_id: int) -> tuple[FunnelRun, FunnelDef]:
@@ -180,6 +225,20 @@ def get_run(db: Session, run_id: int) -> tuple[FunnelRun, FunnelDef]:
 def latest_run(db: Session, funnel_id: int) -> FunnelRun | None:
     return db.scalar(
         select(FunnelRun).where(FunnelRun.funnel_id == funnel_id).order_by(FunnelRun.id.desc()).limit(1)
+    )
+
+
+def current_run(db: Session, funnel_id: int) -> FunnelRun | None:
+    """该漏斗当前生效的运行（校正切换后指向最新校正 run）。"""
+    return db.scalar(
+        select(FunnelRun)
+        .where(
+            FunnelRun.funnel_id == funnel_id,
+            FunnelRun.is_current.is_(True),
+            FunnelRun.status == RunStatus.SUCCEEDED.value,
+        )
+        .order_by(FunnelRun.id.desc())
+        .limit(1)
     )
 
 

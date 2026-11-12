@@ -3,7 +3,8 @@ export const NAV_ITEMS = [
   { to: '/funnels', label: '漏斗定义', code: 'A', line: 'L1', permission: 'funnel:read', hint: '站点与窗口' },
   { to: '/results', label: '漏斗结果', code: 'B', line: 'L1', permission: 'run:read', hint: '转化与耗时' },
   { to: '/paths', label: '路径分析', code: 'C', line: 'L2', permission: 'run:read', hint: '前缀树与卡点' },
-  { to: '/reports', label: '归因报告', code: 'D', line: 'L3', permission: 'report:read', hint: '复核与导出' },
+  { to: '/backfill', label: '事件补录', code: 'D', line: 'L2', permission: 'run:read', hint: '校正与版本' },
+  { to: '/reports', label: '归因报告', code: 'E', line: 'L3', permission: 'report:read', hint: '复核与导出' },
 ] as const;
 
 export const DEMO_ACCOUNTS = [

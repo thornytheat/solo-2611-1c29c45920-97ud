@@ -29,10 +29,11 @@
 ## 2. 主要功能（4 个可串成链路的业务模块）
 
 1. **配置（漏斗定义）**：站点序列拖拽排序、窗口天数、跨会话开关、去噪白名单；admin 保存 / 发布，analyst 可试算。
-2. **运行（采集→计算）**：analyst/admin 触发运行，后端按用户级状态机真算，落 `funnel_runs` 与 `session_paths`。
-3. **解析（漏斗结果）**：步骤条 + 每步人数 / 转化率 / 步间耗时 P50·P90 + 分群（渠道 × 设备）对比。
-4. **复核 / 归因（路径 + 报告）**：前缀树、Top-8 前置路径、卡点事件、分群差 → 生成 `drop_reports` → admin 复核发布。
-5. **导出**：报告渲染 Markdown / CSV（8 条路径），同时落一份到 backend/worker 共享卷 `/app/var/exports`。
+2. **运行（采集→计算）**：analyst/admin 触发运行，后端按用户级状态机真算，落 `funnel_runs` 与 `session_paths`；每个 run 冻结当时配置（`config_snapshot`）并绑定数据版本（`data_versions` 指纹）。
+3. **解析（漏斗结果）**：步骤条 + 每步人数 / 转化率 / 步间耗时 P50·P90 + 分群（渠道 × 设备）对比，支持在「当前结论」与历史 run 间切换查看。
+4. **复核 / 归因（路径 + 报告）**：前缀树、Top-8 前置路径、卡点事件、分群差 → 生成 `drop_reports` → admin 复核发布；旧报告校正后归档可查但不再是当前结论。
+5. **事件补录 / 校正运行**：迟到/遗漏事件补录 → 同用户同事件同秒自动判重（重复拒绝、不多算）→ 按基线冻结配置重算 → 单事务原子切换；旧 run/旧报告保留可查，失败回滚保留上一版，成功后结果页、路径分析、导出一起更新。
+6. **导出**：报告渲染 Markdown / CSV（8 条路径），同时落一份到 backend/worker 共享卷 `/app/var/exports`，文件头绑定数据版本与配置指纹。
 
 异步：worker（Celery）负责心跳、每 10 分钟的流失漂移巡检、以及按需「刷新路径缓存」（backend 投递任务 → worker 计算 → Redis 回写 → 前端轮询）。
 
@@ -83,7 +84,7 @@ gb-585/
 ├── .env / .env.example
 ├── backend/
 │   ├── Dockerfile  requirements.txt
-│   ├── migrations/0001_initial.sql      # 可读 DDL 存档（启动用 create_all）
+│   ├── migrations/0001_initial.sql      # 可读 DDL 存档（启动用 create_all + 幂等 schema_evolution 补列）
 │   ├── scripts/
 │   │   ├── seed_demo.py        # 幂等 seed，打印 SEED_SUMMARY
 │   │   ├── demo_config.py      # fixture 常量（渠道×设备×路径原型矩阵）
@@ -92,13 +93,15 @@ gb-585/
 │   │   └── worker_healthcheck.sh
 │   └── src/
 │       ├── main.py  tasks.py
-│       ├── config/       # settings / database / app / celery_app
+│       ├── config/       # settings / database / app / celery_app / schema_evolution（旧库幂等加列）
 │       ├── constants/    # enums（共享枚举）/ roles / limits / error_codes
 │       ├── models/       # user / funnel / event / funnel_run / session_path / drop_report / audit
-│       ├── schemas/      # pydantic 入参出参
+│       │                #       data_version / event_correction（校正）
+│       ├── schemas/      # pydantic 入参出参（含 correction）
 │       ├── services/     # funnel_engine、path_engine、segment_service、run/report/export/cache…
-│       ├── controllers/  # 业务编排 + 领域审计
-│       ├── routes/       # /api/... 路由聚合
+│       │                #       data_version_service、correction_service（校正运行）
+│       ├── controllers/  # 业务编排 + 领域审计（含 correction_controller）
+│       ├── routes/       # /api/... 路由聚合（含 corrections）
 │       ├── middlewares/  # auth / rbac / audit_logger / rate_limit / error_handler
 │       └── utils/        # security / stats / pathutil / timeutil / errors / logger
 └── frontend/
@@ -158,6 +161,14 @@ gb-585/
 4. 卡点事件 = 队列末事件（去掉退出标记）分布 —— 所以同一个卡点可以由多条路径共同贡献；
 5. 分群（渠道 × 设备）对比：`gap_pp = 该分群流失率 − 整体流失率`（百分点，1 位小数），另给渠道汇总。
 
+**算法 3 · 事件补录与校正运行**（`src/services/correction_service.py` + `data_version_service.py`）
+
+1. **数据版本化**：每次 run 冻结一份 `config_snapshot`（steps / window / cross_session / 白名单 / 引擎版本）并计算事件集合 SHA-256 指纹；`data_versions` 以 `parent_version_id` 串成版本链，基线 `version_no=1`。
+2. **补录判重口径与算法 1 完全一致**：同 `user_key` + 同 `event_name` + 同秒（微秒清零）即同一事件——与 `_dedupe_and_sort` 的折叠键相同。既有库命中或批次内重复都判 `rejected_duplicate` 拒绝入库，**重复/迟到记录不会让同一事件多算**；事件时间早于基线水位线（最大事件时间）标 `late`，但仍按 `event_ts` 参与排序纠正。
+3. **按当时配置重算**：校正用基线 run 冻结的同一份配置（`_FrozenFunnel`），校正期间即便漏斗定义被改也不影响本次口径；补录事件必须属于该漏斗词表，否则 422。
+4. **前后差异**：逐户对比两版 outcome 得到受影响用户（推进/回退/新进/路径变化）；输出每步人数差（未变化区间显式标 `unchanged`，人数严格保持）与受影响流失队列的前后人数差。
+5. **原子切换 + 失败回滚**：整个校正（事件入库、校正 run、版本激活、`is_current` 翻转、旧报告降级）在**单个事务**内完成；任一步失败整体回滚，旧 run/旧版本继续 `is_current`（「切换失败保留上一版」）。成功后新校正 run 成为唯一当前结论，旧 run/旧报告 `is_current=False` 但全部保留可查，结果页、路径分析、导出都跟随当前 run。
+
 **seed 验收值（由 fixture 构造，`scripts/verify_fixture.py` 可离线复算）**
 
 | 指标 | 值 |
@@ -172,11 +183,20 @@ gb-585/
 
 ## 10. 共享枚举出现位置
 
-**后端 `backend/src/constants/enums.py`**：`Role` / `Channel` / `Device` / `FunnelStatus` / `RunStatus` / `RunTrigger` / `DropReason` / `ReportStatus` / `ExportFormat` / `CacheJobStatus` + `EVENT_LABELS` / `CHANNEL_LABELS` / `DEVICE_LABELS` / `ROLE_LABELS` / `TERMINAL_EVENTS`。
-引用点：`models/*.py`（列默认值）、`constants/roles.py`（权限矩阵）、`services/funnel_engine.py`、`services/path_engine.py`、`services/segment_service.py`、`services/run_service.py`、`services/report_service.py`、`services/export_service.py`、`controllers/*`、`routes/*`、`scripts/demo_config.py`、`scripts/seed_demo.py`。
+**后端 `backend/src/constants/enums.py`**：`Role` / `Channel` / `Device` / `FunnelStatus` / `RunStatus` / `RunTrigger`（含 `correction`）/ `DropReason` / `ReportStatus` / `ExportFormat` / `CacheJobStatus` / `DataVersionStatus` / `CorrectionStatus` / `CorrectionRowStatus` / `CorrectionKind` + `EVENT_LABELS` / `CHANNEL_LABELS` / `DEVICE_LABELS` / `ROLE_LABELS` / `TERMINAL_EVENTS` / `RUN_TRIGGER_LABELS` / `CORRECTION_*_LABELS` / `DATA_VERSION_STATUS_LABELS`。
+引用点：`models/*.py`（列默认值）、`constants/roles.py`（权限矩阵）、`services/funnel_engine.py`、`services/path_engine.py`、`services/segment_service.py`、`services/run_service.py`、`services/report_service.py`、`services/export_service.py`、`services/correction_service.py`、`services/data_version_service.py`、`controllers/*`、`routes/*`、`scripts/demo_config.py`、`scripts/seed_demo.py`。
 
-**前端 `frontend/src/constants/enums.ts`**：同名枚举与标签表 `CHANNEL_LABELS` / `DEVICE_LABELS` / `FUNNEL_STATUS_LABELS` / `RUN_STATUS_LABELS` / `REPORT_STATUS_LABELS` / `EVENT_LABELS` / `TERMINAL_EVENTS` / `LINE_COLORS`。
-引用点：`types/models.ts`、`constants/roles.ts`、`constants/ui.ts`、`components/common/StationStrip.tsx`、`PathTree.tsx`、`SegmentTable.tsx`、`ChokeBars.tsx`、`StatusPill.tsx`、`pages/{FunnelDefs,FunnelResult,PathAnalysis,Attribution,Login}.tsx`、`utils/format.ts`。
+**前端 `frontend/src/constants/enums.ts`**：同名枚举与标签表 `CHANNEL_LABELS` / `DEVICE_LABELS` / `FUNNEL_STATUS_LABELS` / `RUN_STATUS_LABELS` / `RUN_TRIGGER_LABELS` / `CORRECTION_*_LABELS` / `DATA_VERSION_STATUS_LABELS` / `REPORT_STATUS_LABELS` / `EVENT_LABELS` / `TERMINAL_EVENTS` / `LINE_COLORS`。
+引用点：`types/models.ts`、`constants/roles.ts`、`constants/ui.ts`、`components/common/{StationStrip,PathTree,SegmentTable,ChokeBars,StatusPill,RunVersionBadge}.tsx`、`pages/{FunnelDefs,FunnelResult,PathAnalysis,EventBackfill,Attribution,Login}.tsx`、`utils/format.ts`。
+
+### 校正运行相关接口（均需登录，写操作需 `run:execute`，读需 `run:read`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/funnels/{id}/corrections` | 提交补录事件 → 判重 → 校正运行 → 原子切换（单事务，409 全重复 / 失败回滚保留上一版） |
+| GET | `/api/corrections?funnel_id=` | 校正批次列表（入库 / 重复拒绝 / 迟到计数） |
+| GET | `/api/corrections/{batch_code}` | 批次逐行判定明细 |
+| GET | `/api/funnels/{id}/data-versions` | 数据版本链（配置快照 / 指纹 / 水位 / 补录统计） |
 
 角色权限枚举两份：`backend/src/constants/roles.py` ↔ `frontend/src/constants/roles.ts`（`ROLE_LABELS` + `PERMISSIONS` 必须同步）。
 

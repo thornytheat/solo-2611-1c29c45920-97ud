@@ -20,9 +20,12 @@ logger = logging.getLogger("funnelpath.app")
 
 def _bootstrap_database() -> None:
     from src.models import Base  # noqa: F401 延迟导入避免循环
+    from src.config.schema_evolution import evolve
 
     wait_for_db()
     Base.metadata.create_all(bind=engine)
+    # 给旧库幂等补齐校正运行所需的列/索引（新库无缺失，no-op）
+    evolve(engine)
 
 
 def _run_seed_once() -> None:

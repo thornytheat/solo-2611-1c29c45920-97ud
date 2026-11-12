@@ -133,6 +133,8 @@ def ensure_reports(db, funnels: dict[str, FunnelDef]) -> list[DropReport]:
                 status=status,
                 author_email=cfg.DEMO_USERS[1][0],
                 reviewer_email=cfg.DEMO_USERS[0][0] if status == ReportStatus.PUBLISHED.value else "",
+                is_current=bool(getattr(run, "is_current", True)),
+                data_version_id=getattr(run, "data_version_id", None),
                 version=1,
                 created_at=datetime.now(BIZ_TZ).replace(tzinfo=None),
                 updated_at=datetime.now(BIZ_TZ).replace(tzinfo=None),

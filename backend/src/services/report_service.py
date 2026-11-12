@@ -35,6 +35,9 @@ def serialize(report: DropReport, funnel: FunnelDef | None = None) -> dict:
         "author_email": report.author_email,
         "reviewer_email": report.reviewer_email,
         "version": report.version,
+        "is_current": bool(getattr(report, "is_current", True)),
+        "superseded": not bool(getattr(report, "is_current", True)),
+        "data_version_id": getattr(report, "data_version_id", None),
         "created_at": iso(report.created_at),
         "updated_at": iso(report.updated_at),
     }
@@ -85,6 +88,9 @@ def create(db: Session, run: FunnelRun, funnel: FunnelDef, payload, author_email
         conclusion=payload.conclusion,
         status=ReportStatus.DRAFT.value,
         author_email=author_email,
+        # 绑定当时的数据版本；仅当 run 仍是当前结论时报告才是当前的
+        is_current=bool(getattr(run, "is_current", True)),
+        data_version_id=getattr(run, "data_version_id", None),
         created_at=now,
         updated_at=now,
     )

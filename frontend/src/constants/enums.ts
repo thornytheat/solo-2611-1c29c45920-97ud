@@ -37,6 +37,38 @@ export const REPORT_STATUS_LABELS: Record<ReportStatus, string> = {
   published: '已发布',
 };
 
+export const RUN_TRIGGER_LABELS: Record<string, string> = {
+  seed: '种子',
+  manual: '手动',
+  scheduled: '定时',
+  correction: '校正',
+};
+
+export const CORRECTION_STATUS_LABELS: Record<string, string> = {
+  staged: '已暂存',
+  applied: '已校正',
+  failed: '切换失败',
+};
+
+export const CORRECTION_ROW_STATUS_LABELS: Record<string, string> = {
+  staged: '暂存',
+  ingested: '已入库',
+  rejected_duplicate: '重复拒绝',
+};
+
+export const CORRECTION_KIND_LABELS: Record<string, string> = {
+  normal: '新增',
+  late: '迟到',
+  duplicate: '重复',
+  late_duplicate: '迟到且重复',
+};
+
+export const DATA_VERSION_STATUS_LABELS: Record<string, string> = {
+  building: '构建中',
+  active: '生效中',
+  failed: '失败',
+};
+
 /** 事件 -> 地铁站名（与后端 EVENT_LABELS 同源） */
 export const EVENT_LABELS: Record<string, string> = {
   register: '注册',

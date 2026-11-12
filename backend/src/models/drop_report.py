@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.config.database import Base
@@ -29,5 +29,10 @@ class DropReport(Base):
     author_email: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     reviewer_email: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 是否仍绑定当前 run；校正切换后旧报告自动转为 False（内容保留可查，不再充当当前结论）
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    data_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("data_versions.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

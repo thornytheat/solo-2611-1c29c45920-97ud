@@ -27,16 +27,53 @@ def render_markdown(report: DropReport, funnel: FunnelDef, run_payload: dict) ->
     paths = report.top_paths or []
     chokes = report.choke_points or []
     gap = report.segment_gap or {}
+    snapshot = run_payload.get("config_snapshot") or {}
+    correction = run_payload.get("correction_meta") or {}
     lines: list[str] = []
     lines.append(f"# {report.title}")
     lines.append("")
     lines.append(f"- 漏斗：{funnel.name}（{funnel.code} · {funnel.line_no}）")
     lines.append(f"- 运行：`{run_payload.get('code')}` · 窗口 {run_payload.get('window_days')} 天 · 引擎 v{run_payload.get('engine_version')}")
+    # 数据版本与配置绑定：保证导出的结论可追溯到当时的口径
+    lines.append(
+        f"- 数据版本：v{run_payload.get('data_version_no') or '—'} · "
+        f"指纹 `{run_payload.get('data_fingerprint_short') or '—'}` · "
+        f"定义版本 v{snapshot.get('funnel_version', funnel.version)}"
+    )
+    lines.append(
+        f"- 配置冻结：步骤 {len(snapshot.get('steps', steps))} 站 · 窗口 {snapshot.get('window_days', run_payload.get('window_days'))} 天 · "
+        f"跨会话 {'开' if snapshot.get('cross_session', funnel.cross_session) else '关'}"
+    )
+    if run_payload.get("is_correction"):
+        lines.append(
+            f"- ⚠️ 校正运行：基线 `{correction.get('baseline_run_code', '—')}` → 本运行；"
+            f"补录入库 {correction.get('ingested', 0)} 条 · 重复拒绝 {correction.get('rejected_duplicate', 0)} 条 · "
+            f"迟到 {correction.get('late', 0)} 条 · 受影响用户 {correction.get('affected_user_count', 0)} 人"
+        )
+    if report.is_current is False:
+        lines.append("- 说明：本报告基于已被校正替代的旧运行，内容归档可查，**不再充当当前结论**。")
     lines.append(f"- 流失队列：未到达「{report.drop_step_label}」共 {report.cohort_users:,} 人")
     lines.append(f"- 步间耗时 P50：{_fmt_days(duration.get('p50_days'))}（P90 {_fmt_days(duration.get('p90_days'))}）")
     lines.append(f"- 丢弃原因：超窗 {discard.get('expired', 0)} · 重复折叠 {discard.get('duplicates_collapsed', 0)} · 乱序修复 {discard.get('out_of_order_events', 0)} 处")
     lines.append(f"- 报告状态：{report.status} · 作者 {report.author_email or '—'} · 复核 {report.reviewer_email or '—'}")
     lines.append("")
+
+    if run_payload.get("is_correction") and correction.get("cohort_deltas"):
+        lines.append("## 校正前后流失队列差异")
+        lines.append("")
+        lines.append("| 未到达站 | 校正前 | 校正后 | 差异 |")
+        lines.append("|---|---|---|---|")
+        for row in correction["cohort_deltas"]:
+            lines.append(
+                "| {label} | {before:,} | {after:,} | {delta:+,} |".format(
+                    label=row["label"],
+                    before=row["baseline_cohort_users"],
+                    after=row["corrected_cohort_users"],
+                    delta=row["delta"],
+                )
+            )
+        lines.append("")
+
     lines.append("## 步骤转化")
     lines.append("")
     lines.append("| # | 站点 | 人数 | 较上一步 | 较首步 | 流失 | 步间 P50 |")

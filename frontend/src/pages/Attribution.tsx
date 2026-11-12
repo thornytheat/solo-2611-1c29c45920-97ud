@@ -206,6 +206,15 @@ export default function Attribution() {
                     >
                       <span>
                         <b style={{ fontWeight: 500 }}>{report.title}</b>
+                        {report.superseded ? (
+                          <span className="pill danger" style={{ marginLeft: 8 }} data-testid={`report-superseded-${report.id}`}>
+                            已被校正替代
+                          </span>
+                        ) : (
+                          <span className="pill ok" style={{ marginLeft: 8 }}>
+                            当前结论
+                          </span>
+                        )}
                         <span className="mono tiny muted" style={{ display: 'block' }}>
                           {report.code} · 未到达「{report.drop_step_label}」{num(report.cohort_users)} 人 · {shortDate(report.updated_at)}
                         </span>
@@ -239,6 +248,15 @@ export default function Attribution() {
                     </div>
                     <ReportPill status={currentReport.status} />
                   </div>
+
+                  {currentReport.superseded ? (
+                    <div className="error-box" style={{ marginBottom: 12 }} data-testid="report-superseded-banner">
+                      <span>
+                        本报告基于已被校正替代的旧运行，内容归档可查，但已不再充当当前结论。
+                        可到「事件补录」查看校正批次，或从最新校正运行重新生成报告。
+                      </span>
+                    </div>
+                  ) : null}
 
                   <div className="metric-row">
                     <div className="metric">

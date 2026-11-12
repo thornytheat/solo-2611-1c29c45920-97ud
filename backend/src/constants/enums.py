@@ -42,6 +42,34 @@ class RunTrigger(str, Enum):
     SEED = "seed"
     MANUAL = "manual"
     SCHEDULED = "scheduled"
+    CORRECTION = "correction"     # 事件补录后的校正运行（绑定基线运行与数据版本）
+
+
+class DataVersionStatus(str, Enum):
+    """数据版本生命周期：building 随校正事务提交转 active，失败回滚不留 active 新版。"""
+
+    BUILDING = "building"
+    ACTIVE = "active"
+    FAILED = "failed"
+
+
+class CorrectionStatus(str, Enum):
+    STAGED = "staged"              # 补录批次已暂存（事务内中间态）
+    APPLIED = "applied"            # 校正运行成功并完成切换
+    FAILED = "failed"              # 切换失败：上一版保持 current
+
+
+class CorrectionRowStatus(str, Enum):
+    STAGED = "staged"
+    INGESTED = "ingested"                  # 已写入 event_logs
+    REJECTED_DUPLICATE = "rejected_duplicate"  # 与既有事件同用户同事件同秒，拒绝入库
+
+
+class CorrectionKind(str, Enum):
+    NORMAL = "normal"              # 新增且不迟到
+    LATE = "late"                  # 迟到：事件时间早于基线水位
+    DUPLICATE = "duplicate"        # 重复：同用户同事件同秒已存在
+    LATE_DUPLICATE = "late_duplicate"  # 既迟到又重复
 
 
 class DropReason(str, Enum):
@@ -100,6 +128,38 @@ REPORT_STATUS_LABELS: dict[str, str] = {
     ReportStatus.DRAFT.value: "草稿",
     ReportStatus.REVIEWED.value: "已复核",
     ReportStatus.PUBLISHED.value: "已发布",
+}
+
+RUN_TRIGGER_LABELS: dict[str, str] = {
+    RunTrigger.SEED.value: "种子",
+    RunTrigger.MANUAL.value: "手动",
+    RunTrigger.SCHEDULED.value: "定时",
+    RunTrigger.CORRECTION.value: "校正",
+}
+
+CORRECTION_STATUS_LABELS: dict[str, str] = {
+    CorrectionStatus.STAGED.value: "已暂存",
+    CorrectionStatus.APPLIED.value: "已校正",
+    CorrectionStatus.FAILED.value: "切换失败",
+}
+
+CORRECTION_ROW_STATUS_LABELS: dict[str, str] = {
+    CorrectionRowStatus.STAGED.value: "暂存",
+    CorrectionRowStatus.INGESTED.value: "已入库",
+    CorrectionRowStatus.REJECTED_DUPLICATE.value: "重复拒绝",
+}
+
+CORRECTION_KIND_LABELS: dict[str, str] = {
+    CorrectionKind.NORMAL.value: "新增",
+    CorrectionKind.LATE.value: "迟到",
+    CorrectionKind.DUPLICATE.value: "重复",
+    CorrectionKind.LATE_DUPLICATE.value: "迟到且重复",
+}
+
+DATA_VERSION_STATUS_LABELS: dict[str, str] = {
+    DataVersionStatus.BUILDING.value: "构建中",
+    DataVersionStatus.ACTIVE.value: "生效中",
+    DataVersionStatus.FAILED.value: "失败",
 }
 
 # 埋点事件 -> 中文站名（视觉上是地铁站名牌）

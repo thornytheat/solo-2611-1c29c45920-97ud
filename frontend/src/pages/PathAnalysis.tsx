@@ -12,6 +12,7 @@ import { errorMessage } from '../utils/errorMessage';
 import ChokeBars from '../components/common/ChokeBars';
 import EmptyState from '../components/common/EmptyState';
 import PathTree from '../components/common/PathTree';
+import { RunVersionBadge } from '../components/common/RunVersionBadge';
 import SegmentTable from '../components/common/SegmentTable';
 import StationStrip from '../components/common/StationStrip';
 
@@ -41,7 +42,17 @@ export default function PathAnalysis() {
     () => (selected ? runApi.list(selected.id) : Promise.resolve({ items: [], total: 0 })),
     [selected?.id],
   );
-  const run = runs.data?.items?.[0] ?? null;
+  const runItems = runs.data?.items ?? [];
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const run =
+    runItems.find((item) => item.id === selectedRunId) ??
+    runItems.find((item) => item.is_current) ??
+    runItems[0] ??
+    null;
+
+  useEffect(() => {
+    setSelectedRunId(null);
+  }, [selected?.id]);
 
   const analysis = useAsync(
     () => (run ? runApi.paths(run.id, step ?? undefined) : Promise.resolve(null)),
@@ -117,9 +128,30 @@ export default function PathAnalysis() {
             ))}
           </div>
         </div>
-        <div className="tiny muted">
-          运行 {run ? `${run.code} · ${num(run.entry_users)} 人` : '—'} ·
-          {snapshot ? ` worker 缓存 ${snapshot.status}` : ' worker 缓存 idle'}
+        <div style={{ marginTop: 8 }}>
+          <div className="btn-row" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
+            {runItems.map((item) => (
+              <button
+                key={item.id}
+                className={`btn btn-sm ${run?.id === item.id ? 'btn-primary' : ''}`}
+                onClick={() => setSelectedRunId(item.id)}
+                data-testid={`path-run-pick-${item.id}`}
+              >
+                {item.is_correction ? '校正 ' : ''}
+                {item.code}
+                {item.is_current ? ' · 当前' : ''}
+              </button>
+            ))}
+          </div>
+          <div className="tiny muted">
+            运行 {run ? `${run.code} · ${num(run.entry_users)} 人` : '—'} ·
+            {snapshot ? ` worker 缓存 ${snapshot.status}` : ' worker 缓存 idle'}
+          </div>
+          {run ? (
+            <div style={{ marginTop: 6 }}>
+              <RunVersionBadge run={run} />
+            </div>
+          ) : null}
         </div>
         {error ? (
           <div className="error-box" style={{ marginTop: 12 }}>

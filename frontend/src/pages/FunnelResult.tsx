@@ -5,12 +5,14 @@ import { useAsync } from '../hooks/useAsync';
 import { useAuth } from '../router/guards';
 import { uiStore } from '../stores/uiStore';
 import { can } from '../constants/roles';
-import { lineVar } from '../constants/enums';
+import { lineVar, RUN_TRIGGER_LABELS } from '../constants/enums';
 import { days, num, pct, seconds, shortDate } from '../utils/format';
 import { errorMessage } from '../utils/errorMessage';
 import EmptyState from '../components/common/EmptyState';
-import StationStrip from '../components/common/StationStrip';
+import { RunVersionBadge } from '../components/common/RunVersionBadge';
 import SegmentTable from '../components/common/SegmentTable';
+import StationStrip from '../components/common/StationStrip';
+import type { FunnelRun } from '../types/models';
 
 export default function FunnelResult() {
   const { user } = useAuth();
@@ -39,7 +41,18 @@ export default function FunnelResult() {
     [selected?.id],
   );
 
-  const run = runs.data?.items?.[0] ?? null;
+  const runItems = runs.data?.items ?? [];
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  // 默认展示当前结论 run；用户可切换查看任意历史 run（旧 run 只读可查）
+  const run: FunnelRun | null =
+    runItems.find((item) => item.id === selectedRunId) ??
+    runItems.find((item) => item.is_current) ??
+    runItems[0] ??
+    null;
+
+  useEffect(() => {
+    setSelectedRunId(null);
+  }, [selected?.id]);
 
   async function execute() {
     if (!selected) return;
@@ -47,6 +60,7 @@ export default function FunnelResult() {
     setError(null);
     try {
       const result = await runApi.execute(selected.id, windowDays ?? selected.window_days);
+      setSelectedRunId(result.run.id);
       uiStore.selectRun(result.run.id);
       uiStore.toast(`运行完成：${num(result.run.entry_users)} 人进入，转化 ${pct(result.run.conversion_rate)}`, 'ok');
       runs.reload();
@@ -144,6 +158,75 @@ export default function FunnelResult() {
         </div>
       ) : (
         <>
+          <div className="panel" style={{ marginTop: 12 }} data-testid="run-history">
+            <div className="panel-head" style={{ marginBottom: 8 }}>
+              <h3>运行版本（旧运行可查，不再充当当前结论）</h3>
+              <span className="eyebrow">{runItems.length} RUNS</span>
+            </div>
+            <div className="btn-row" style={{ flexWrap: 'wrap' }}>
+              {runItems.map((item) => (
+                <button
+                  key={item.id}
+                  className={`btn btn-sm ${run?.id === item.id ? 'btn-primary' : ''}`}
+                  onClick={() => setSelectedRunId(item.id)}
+                  data-testid={`run-pick-${item.id}`}
+                >
+                  {item.is_correction ? '校正 ' : ''}
+                  {item.code}
+                  {item.is_current ? ' · 当前' : ''} · v{item.data_version_no ?? '—'}
+                </button>
+              ))}
+            </div>
+            {run ? (
+              <div style={{ marginTop: 10 }}>
+                <RunVersionBadge run={run} />
+              </div>
+            ) : null}
+            {run && !run.is_current ? (
+              <div className="tiny muted" style={{ marginTop: 8 }} data-testid="run-not-current-note">
+                正在查看历史运行 {run.code}（触发：{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger}），
+                其结论已被后续校正替代，仅作归档可查；页面数字不会覆盖当前结论。
+              </div>
+            ) : null}
+          </div>
+
+          {run?.is_correction && run.correction_meta?.step_deltas ? (
+            <div className="panel line-d" style={{ marginTop: 12 }} data-testid="run-correction-diff">
+              <div className="panel-head">
+                <h3>校正前后差异 · {run.correction_meta.batch_code}</h3>
+                <span className="eyebrow">
+                  基线 {run.correction_meta.baseline_run_code} · 受影响{' '}
+                  {num(run.correction_meta.affected_user_count ?? 0)} 人
+                </span>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>步骤</th>
+                    <th className="num-cell">校正前</th>
+                    <th className="num-cell">校正后</th>
+                    <th className="num-cell">差异</th>
+                    <th>区间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {run.correction_meta.step_deltas.map((d) => (
+                    <tr key={d.index}>
+                      <td>{d.label}</td>
+                      <td className="num-cell">{num(d.baseline_users)}</td>
+                      <td className="num-cell">{num(d.corrected_users)}</td>
+                      <td className={`num-cell ${d.delta > 0 ? 'better' : d.delta < 0 ? 'worse' : 'flat'}`}>
+                        {d.delta > 0 ? '+' : ''}
+                        {d.delta}
+                      </td>
+                      <td>{d.unchanged ? <span className="pill">未变化</span> : <span className="pill warn">受影响</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
           <div className="panel line-b" style={{ marginTop: 20 }} data-testid="run-strip">
             <div className="panel-head">
               <h3>步骤条 · 站点与换乘</h3>
